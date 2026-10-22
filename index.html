@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101a22">
+  <meta name="description" content="A private, browser-based organic chemistry study quest for CHEM 233.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <title>CHEM 233: Mechanism Quest</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Mechanism Quest home">
+        <span class="brand-mark" aria-hidden="true">M<span>Q</span></span>
+        <span><strong>MECHANISM QUEST</strong><small>CHEM 233 · ORGANIC CHEMISTRY</small></span>
+      </a>
+      <div class="top-actions">
+        <button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">◐</button>
+        <button class="quiet-button" data-action="stats" type="button">My progress</button>
+      </div>
+    </header>
+
+    <main id="app" class="main-content" tabindex="-1"></main>
+
+    <footer class="footer">
+      <span>Study locally. No account, analytics, or AI key.</span>
+      <span id="save-status" role="status" aria-live="polite">Progress saves in this browser.</span>
+    </footer>
+  </div>
+  <input id="import-file" type="file" accept="application/json,.json" hidden>
+  <script src="script.js"></script>
+</body>
+</html>

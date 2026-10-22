@@ -1,0 +1,39 @@
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+CHEM233_compacted_course_context.*
+task.txt
+*save*.json
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Caches and generated dependencies
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local data and generated output
+data/
+output/
+outputs/
+export/
+exports/
+results/
