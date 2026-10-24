@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "mechanism-quest-v1";
+const CACHE_NAME = "mechanism-quest-v2";
 const APP_FILES = ["./", "./index.html", "./style.css", "./script.js", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", event => {

@@ -145,21 +145,26 @@ const defaultState = () => ({
   version: SAVE_VERSION, xp: 0, level: 1, hearts: 3, streak: 0, lastStudyDate: null,
   attempts: 0, correct: 0, freeResponseScores: [], mastery: {},
   mistakes: {}, spacedRepetition: {}, bossResults: [], achievements: [],
-  unlockedContent: ["mt1"], importedQuestions: [], sessionCount: 0
+  unlockedContent: ["mt1"], importedQuestions: [], sessionCount: 0,
+  questionStats: {mechanismCorrect:0, stereoCorrect:0}, enemyProgress: {},
+  courseMastery: {mt1:{}, mt2:{}, preview:{}}
 });
 
 let state = defaultState();
 let activeSession = null;
+let pausedSession = null;
+let recoverySkills = [];
 let selectedChoice = null;
 let selectedAtom = null;
 let selectedConfidence = 2;
-let revealedHint = false;
+let revealedHint = 0;
 let committed = false;
 let selectedRank = [];
 let saveError = false;
 
 const app = document.getElementById("app");
 const saveStatus = document.getElementById("save-status");
+let sessionTimer = null;
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, character => ({
@@ -169,6 +174,52 @@ function escapeHtml(value) {
 
 function allQuestions() {
   return questionBank.concat(state.importedQuestions || []);
+}
+
+function confirmedQuestions(course) {
+  return allQuestions().filter(q => q.course === course && (course !== "mt2" || q.courseSpecific === true));
+}
+
+function previewQuestions() {
+  return allQuestions().filter(q => q.course === "mt2" && q.courseSpecific === false);
+}
+
+function questionText(question) {
+  return [question.topic, question.question, question.context, question.type, ...(question.skills || []), ...(question.tags || [])].join(" ").toLowerCase();
+}
+
+function isProductionQuestion(question) {
+  return ["text","draw","rank","select-atom"].includes(question.type) ||
+    /\b(draw|predict|product|mechanism|classify|identify|construct|explain|write|rank|stereochem|regioselect|curved arrow|reaction class)\b/i.test(questionText(question));
+}
+
+function isMechanismQuestion(question) {
+  return question.type === "draw" || /\b(mechanism|curved arrow|proton transfer|tetrahedral intermediate|cyclization|sn1|sn2|e1|e2)\b/i.test(questionText(question));
+}
+
+function isStereoQuestion(question) {
+  return /\b(stereochem|stereocenter|cip|R\/S|E\/Z|fischer|newman|wedge|inversion|anti-periplanar|trans-diaxial|anomer)\b/i.test(questionText(question));
+}
+
+function questionPriority(question) {
+  const review = state.spacedRepetition[question.id];
+  const due = review?.dueDate && review.dueDate <= getToday();
+  const mistakes = (question.skills || [question.topic]).reduce((sum, skill) => sum + (state.mistakes[skill]?.count || 0), 0);
+  const weak = (question.skills || [question.topic]).reduce((sum, skill) => sum + (100 - skillScore(skill)), 0);
+  const current = question.course === "mt2" && question.courseSpecific === true;
+  return (due ? 1000 : 0) + mistakes * 80 + weak + (current ? 30 : 0) + (question.difficulty || 1) * 3 + Math.random();
+}
+
+function prioritized(ids, filter = () => true) {
+  return shuffle(ids.map(getQuestion).filter(q => q && filter(q))).sort((a,b) => questionPriority(b) - questionPriority(a));
+}
+
+function masteryLabel(score) {
+  if (score < 20) return "NEW";
+  if (score < 40) return "LEARNING";
+  if (score < 60) return "DEVELOPING";
+  if (score < 80) return "RELIABLE";
+  return "MASTERED";
 }
 
 function getToday() {
@@ -224,20 +275,31 @@ function shuffle(items) {
 }
 
 function pickQuestions(ids, count) {
-  const due = ids.filter(id => {
-    const dueDate = state.spacedRepetition[id]?.dueDate;
-    return dueDate && dueDate <= getToday();
-  });
-  const other = ids.filter(id => !due.includes(id));
-  const pool = [...shuffle(due), ...shuffle(other)];
-  const selected = pool.slice(0, Math.min(count, pool.length));
-  if (selected.length < Math.min(count, ids.length)) {
-    selected.push(...shuffle(ids.filter(id => !selected.includes(id))).slice(0, Math.min(count, ids.length)-selected.length));
-  }
-  return selected;
+  return prioritized(ids).slice(0, Math.min(count, ids.length)).map(q => q.id);
 }
 
-function startSession(mode, label, ids, count, boss = false) {
+function selectMixedQuestions(currentIds, maintenanceIds, count, currentRatio, required = []) {
+  const current = prioritized(currentIds);
+  const maintenance = prioritized(maintenanceIds);
+  const selected = [];
+  const add = q => {
+    if (q && selected.length < count && !selected.some(item => item.id === q.id)) selected.push(q);
+  };
+  required.forEach(filter => add([...current, ...maintenance].find(filter)));
+  const productionTarget = Math.min(count, Math.ceil(count*0.6));
+  [...current,...maintenance].filter(isProductionQuestion).forEach(q => {
+    if (selected.filter(isProductionQuestion).length < productionTarget) add(q);
+  });
+  const currentTarget = Math.min(count, Math.max(0, Math.round(count * currentRatio)));
+  const currentSelected = current.filter(q => selected.includes(q)).length;
+  current.slice(0, Math.max(0, currentTarget - currentSelected)).forEach(add);
+  maintenance.filter(q => selected.includes(q)).forEach(add);
+  if (selected.length < count) current.forEach(add);
+  if (selected.length < count) maintenance.forEach(add);
+  return shuffle(selected).map(q => q.id);
+}
+
+function startSession(mode, label, ids, count, boss = false, options = {}) {
   if (!ids.length) {
     app.innerHTML = `<section class="panel"><div class="eyebrow">No questions yet</div><h1>${escapeHtml(label)}</h1><p class="subtle">There are no playable questions in this module yet. Import a content pack when course materials are available.</p><button class="button secondary" data-action="home">Back to dashboard</button></section>`;
     return;
@@ -250,20 +312,41 @@ function startSession(mode, label, ids, count, boss = false) {
     if (state.lastStudyDate !== yesterdayKey) state.streak = 0;
     state.hearts = 3;
   }
-  const queue = pickQuestions(ids, count);
-  activeSession = { mode, label, queue, index:0, answered:0, correct:0, boss, startedAt:new Date().toISOString() };
-  selectedChoice = null; selectedAtom = null; selectedConfidence = 2; revealedHint = false; committed = false; selectedRank = [];
+  const queue = options.queue || pickQuestions(ids, count);
+  activeSession = {
+    mode, label, queue, index:0, answered:0, correct:0, boss,
+    startedAt:new Date().toISOString(), startedAtMs:Date.now(),
+    hintsUsed:0, combo:0, bestCombo:0, perfect:true, xpAtStart:state.xp,
+    answers:{}, timerMinutes: options.timerMinutes || 0
+  };
+  selectedChoice = null; selectedAtom = null; selectedConfidence = 2; revealedHint = 0; committed = false; selectedRank = [];
   state.sessionCount += 1;
+  if (mode === "exam" && activeSession.timerMinutes) {
+    activeSession.deadline = Date.now() + activeSession.timerMinutes * 60000;
+    sessionTimer = setInterval(updateExamTimer, 1000);
+  }
   renderQuestion();
   saveState();
 }
 
 function readiness(course) {
-  const qs = allQuestions().filter(q => q.course === course && (course !== "mt2" || q.courseSpecific === true));
+  const qs = confirmedQuestions(course);
   const skills = [...new Set(qs.flatMap(q => q.skills || []))];
   if (!skills.length) return 0;
-  const values = skills.map(skill => state.mastery[skill]?.score || 0);
+  const track = state.courseMastery?.[course] || {};
+  const values = skills.map(skill => track[skill]?.score ?? (course === "mt1" ? state.mastery[skill]?.score : 0) ?? 0);
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function finalReadiness() {
+  const mt1Skills = [...new Set(confirmedQuestions("mt1").flatMap(q => q.skills || []))];
+  const mt2Skills = [...new Set(confirmedQuestions("mt2").flatMap(q => q.skills || []))];
+  const entries = [
+    ...mt1Skills.map(skill => state.courseMastery?.mt1?.[skill]?.score ?? state.mastery[skill]?.score ?? 0),
+    ...mt2Skills.map(skill => state.courseMastery?.mt2?.[skill]?.score ?? 0)
+  ];
+  if (!entries.length) return 0;
+  return Math.round(entries.reduce((sum, value) => sum + value, 0) / entries.length);
 }
 
 function allSkillNames() {
@@ -291,7 +374,7 @@ function renderHome() {
   const mt1 = readiness("mt1");
   const mt2Ready = allQuestions().some(q => q.course === "mt2" && q.courseSpecific === true);
   const mt2 = mt2Ready ? readiness("mt2") : null;
-  const finalReadiness = mt1;
+  const finalExamReadiness = finalReadiness();
   const dueCount = Object.values(state.spacedRepetition).filter(item => item.dueDate && item.dueDate <= getToday()).length;
   const mistakes = Object.entries(state.mistakes).sort((a,b) => b[1].count-a[1].count).slice(0,4);
   const achievements = state.achievements.slice(-4);
@@ -329,7 +412,7 @@ function renderHome() {
       <div class="stat-card"><span class="stat-label">🔥 Study streak</span><span class="stat-value">${state.streak}</span><span class="stat-note">days</span></div>
       <div class="stat-card"><span class="stat-label">❤️ Hearts</span><span class="stat-value">${state.hearts}</span><span class="stat-note">refill tomorrow</span></div>
       <div class="stat-card"><span class="stat-label">Midterm 2 readiness</span><span class="stat-value">${mt2 === null ? "—" : `${mt2}%`}</span><span class="stat-note">${mt2 === null ? "awaiting course material" : "confirmed content only"}</span></div>
-      <div class="stat-card"><span class="stat-label">Final exam readiness</span><span class="stat-value">${finalReadiness}%</span><span class="stat-note">currently MT1-based</span></div>
+      <div class="stat-card"><span class="stat-label">Final exam readiness</span><span class="stat-value">${finalExamReadiness}%</span><span class="stat-note">${mt2Ready ? "all confirmed material" : "currently MT1-based"}</span></div>
     </section>
 
     <div class="dashboard-grid">
@@ -338,12 +421,13 @@ function renderHome() {
         <div class="daily-card">
           <div class="eyebrow">Daily quest · about 15 minutes</div>
           <h3 style="margin:8px 0">Recall. Reason. Draw.</h3>
-          <p>Eight mixed Midterm 1 questions, with extra weight for review items due today. Commit before hints; your responses update mastery and spaced repetition.</p>
+          <p>${mt2Ready ? "Mixed current Midterm 2 and maintenance questions, with extra weight for review items due today. " : "Eight mixed Midterm 1 questions, with extra weight for review items due today. "}Commit before hints; your responses update mastery and spaced repetition.</p>
           <button class="button primary" data-action="daily">Start daily quest <span aria-hidden="true">→</span></button>
         </div>
         <div class="quest-grid">
           ${questButtons.map(([icon,title,description,action]) => `<button class="quest-card" data-action="${action}" type="button"><span class="quest-icon" aria-hidden="true">${icon}</span><strong>${title}</strong><small>${description}</small></button>`).join("")}
           <button class="quest-card" data-action="mt2" type="button" ${mt2Count ? "" : "disabled"}><span class="quest-icon" aria-hidden="true">${mt2Count ? "◌" : "🔒"}</span><strong>Midterm 2 Review</strong><small>${mt2Count ? `${mt2Count} imported questions` : "Awaiting your course files"}</small></button>
+          ${previewQuestions().length ? `<button class="quest-card" data-action="ahead"><span class="quest-icon" aria-hidden="true">🔮</span><strong>Ahead of Class</strong><small>Preview material for future topics</small></button>` : ""}
         </div>
       </section>
 
@@ -413,13 +497,15 @@ function renderQuestion() {
       ${question.type === "rank" ? renderRank(question) : ""}
       ${question.type === "draw" ? `<div class="notice">Draw this on paper or a tablet before revealing the rubric. Show bonds, arrows, formal charges, and stereochemistry when requested.</div>` : ""}
       <div class="confidence-row" aria-label="Confidence rating"><span>How confident are you?</span>${[["1","Guessing"],["2","Somewhat"],["3","Confident"]].map(([value,label])=>`<button class="confidence-choice ${Number(value)===selectedConfidence?"selected":""}" data-confidence="${value}" type="button">${label}</button>`).join("")}</div>
-      ${revealedHint && question.hint ? `<div class="feedback hint"><strong>Hint</strong>${escapeHtml(question.hint)}</div>` : ""}
-      ${committed ? renderFeedback(question) : ""}
+      ${activeSession.mode !== "exam" && revealedHint >= 1 && question.hint ? `<div class="feedback hint"><strong>Hint 1</strong><span style="font-size:0.9em">${escapeHtml(typeof question.hint === "string" ? question.hint : question.hint[0] || "")}</span></div>` : ""}
+      ${activeSession.mode !== "exam" && revealedHint >= 2 && question.hints && question.hints[1] ? `<div class="feedback hint"><strong>Hint 2</strong><span style="font-size:0.9em">${escapeHtml(question.hints[1])}</span></div>` : ""}
+      ${activeSession.mode !== "exam" && revealedHint >= 3 && question.hints && question.hints[2] ? `<div class="feedback hint"><strong>Hint 3</strong><span style="font-size:0.9em">${escapeHtml(question.hints[2])}</span></div>` : ""}
+      ${activeSession.mode !== "exam" && committed ? renderFeedback(question) : ""}
       <div class="question-actions">
-        ${!committed ? `<button class="button primary" data-action="${question.type==="draw"?"reveal-rubric":"check-answer"}" type="button">${question.type==="draw"?"Show answer / rubric":"Commit answer"}</button>` : ""}
+        ${!committed ? `<button class="button primary" data-action="${question.type==="draw"?"reveal-rubric":"${activeSession.mode==="exam"?"exam-next":"check-answer"}"}" type="button">${question.type==="draw"?"Show answer / rubric":activeSession.mode==="exam"?"Next question":"Commit answer"}</button>` : ""}
         ${committed && question.type==="draw" && !activeSession.lastOutcome ? assessmentButtons() : ""}
-        ${committed && question.type!=="draw" ? "" : ""}
-        <button class="button secondary small" data-action="hint" type="button" ${committed ? "" : "disabled"}>${revealedHint ? "Hint revealed" : "Reveal hint"}</button>
+        ${activeSession.mode !== "exam" ? `<button class="button secondary small" data-action="hint" type="button">${revealedHint >= 3 ? "All hints revealed" : `Hint ${revealedHint + 1}`}</button>` : ""}
+        ${activeSession.mode === "exam" ? `<span class="exam-timer" style="font-size:14px"></span>` : ""}
         ${committed && activeSession.lastOutcome ? `<span class="spacer"></span><button class="button primary" data-action="next" type="button">${index === total ? "Finish quest" : "Next question →"}</button>` : ""}
         ${committed && question.type==="draw" && activeSession.lastOutcome ? `<span class="spacer"></span><button class="button primary" data-action="next" type="button">${index === total ? "Finish quest" : "Next question →"}</button>` : ""}
         <span class="spacer"></span><button class="quiet-button" data-action="home" type="button">Leave quest</button>
@@ -503,6 +589,10 @@ function checkAnswer() {
     supplied = `Atom ${selectedAtom}`;
     isCorrect = selectedAtom === question.answer;
   }
+  if (activeSession.mode === "exam") {
+    activeSession.answers[question.id] = {correct: isCorrect, severity: isCorrect ? "correct" : "major", supplied, confidence: selectedConfidence, hintsUsed: revealedHint};
+    return advanceExam();
+  }
   commitOutcome(question, isCorrect, isCorrect ? "correct" : "major", supplied);
 }
 
@@ -515,38 +605,64 @@ function revealRubric() {
   if (answer) answer.scrollIntoView({behavior:"smooth", block:"nearest"});
 }
 
-function commitOutcome(question, correct, severity, supplied = "") {
+function commitOutcome(question, correct, severity, supplied = “”) {
   committed = true;
   const confidence = selectedConfidence;
   const wasCorrect = correct;
-  const label = wasCorrect ? "Correct — good retrieval." :
-    severity === "minor" ? "Minor mistake — review the detail." :
-    severity === "major" ? "Major mistake — let's repair the concept." : "Stuck — this skill is queued for early review.";
-  let xp = wasCorrect ? 12 + Math.max(0, (question.difficulty || 1)-1)*2 : severity === "minor" ? 4 : 1;
-  if (question.type === "draw" && wasCorrect) xp += 6;
+  const label = wasCorrect ? “Correct — good retrieval.” :
+    severity === “minor” ? “Minor mistake — review the detail.” :
+    severity === “major” ? “Major mistake — let's repair the concept.” : “Stuck — this skill is queued for early review.”;
+  let xp = wasCorrect ? 12 + Math.max(0, (question.difficulty || 1)-1)*2 : severity === “minor” ? 4 : 1;
+  if (question.type === “draw” && wasCorrect) xp += 6;
+
+  // Apply XP penalty for hints used
+  if (revealedHint >= 1) xp -= 2;
+  if (revealedHint >= 2) xp -= 3;
+  if (revealedHint >= 3) xp -= 5;
+  xp = Math.max(1, xp); // Never negative
+
   state.xp += xp;
   state.level = Math.floor(state.xp/100)+1;
   state.attempts += 1;
   if (wasCorrect) state.correct += 1;
-  if (question.type === "text" || question.type === "draw") state.freeResponseScores.push({
-    questionId:question.id, score:wasCorrect?1:severity==="minor"?0.5:0, confidence, date:getToday()
+
+  // Track mechanism/stereo questions
+  if (wasCorrect) {
+    if (isMechanismQuestion(question)) state.questionStats.mechanismCorrect += 1;
+    if (isStereoQuestion(question)) state.questionStats.stereoCorrect += 1;
+  }
+
+  if (question.type === “text” || question.type === “draw”) state.freeResponseScores.push({
+    questionId:question.id, score:wasCorrect?1:severity===”minor”?0.5:0, confidence, date:getToday()
   });
   state.freeResponseScores = state.freeResponseScores.slice(-300);
   if (state.lastStudyDate !== getToday()) {
     if (!state.lastStudyDate) state.streak = 1;
     else {
       const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
-      const key = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,"0")}-${String(yesterday.getDate()).padStart(2,"0")}`;
+      const key = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,”0”)}-${String(yesterday.getDate()).padStart(2,”0”)}`;
       state.streak = state.lastStudyDate === key ? state.streak+1 : 1;
     }
     state.lastStudyDate = getToday();
   }
-  if (!wasCorrect && severity !== "minor") state.hearts = Math.max(0,state.hearts-1);
+  const previousHearts = state.hearts;
+  if (!wasCorrect && severity !== “minor”) state.hearts = Math.max(0, state.hearts-1);
+
+  // Update combo
+  if (wasCorrect) {
+    activeSession.combo = (activeSession.combo || 0) + 1;
+    activeSession.bestCombo = Math.max(activeSession.bestCombo || 0, activeSession.combo);
+  } else {
+    activeSession.combo = 0;
+    activeSession.perfect = false;
+  }
+  if (revealedHint > 0) activeSession.combo = Math.max(0, (activeSession.combo || 0) - 1);
+
   const masteryKeys = [...new Set([question.topic,...(question.skills || [])])];
   for (const key of masteryKeys) {
     const previous = state.mastery[key]?.score || 0;
     const score = wasCorrect ? Math.min(100, previous * .75 + 25) :
-      severity === "minor" ? Math.max(0,previous*.75+12) :
+      severity === “minor” ? Math.max(0,previous*.75+12) :
       Math.max(0,previous*.65);
     state.mastery[key] = {
       score:Math.round(score),
@@ -555,11 +671,11 @@ function commitOutcome(question, correct, severity, supplied = "") {
       lastSeen:getToday()
     };
   }
-  const interval = wasCorrect ? (confidence===3?7:confidence===2?4:2) : severity==="minor"?2:1;
+  const interval = wasCorrect ? (confidence===3?7:confidence===2?4:2) : severity===”minor”?2:1;
   state.spacedRepetition[question.id] = {
     dueDate:dateAfter(interval), interval,
     repetitions:wasCorrect?(state.spacedRepetition[question.id]?.repetitions||0)+1:0,
-    lastResult:wasCorrect?"correct":severity
+    lastResult:wasCorrect?”correct”:severity
   };
   if (!wasCorrect) {
     for (const skill of question.skills || [question.topic]) {
@@ -570,11 +686,21 @@ function commitOutcome(question, correct, severity, supplied = "") {
   if (wasCorrect) activeSession.correct += 1;
   activeSession.lastOutcome = {
     correct:wasCorrect, label,
-    message: wasCorrect ? question.explanation : `${question.explanation}${supplied ? ` Your response: “${supplied}”.` : ""}`,
-    severity
+    message: wasCorrect ? question.explanation : `${question.explanation}${supplied ? ` Your response: “${supplied}”.` : “”}`,
+    severity, xp
   };
+  if (previousHearts > state.hearts && activeSession.mode !== “exam”) activeSession.heartLost = true;
+
   awardAchievements();
   saveState();
+
+  // Check for recovery battle trigger
+  if (state.hearts === 0 && activeSession.mode !== “exam” && activeSession.mode !== “recovery”) {
+    pausedSession = activeSession;
+    recoverySkills = question.skills || [question.topic];
+    return startByAction(“recovery”);
+  }
+
   renderQuestion();
 }
 
@@ -588,64 +714,200 @@ function awardAchievements() {
   const earned = new Set(state.achievements);
   const checks = [
     [state.attempts>=1,"First bond"],
-    [state.correct>=10,"Ten clean mechanisms"],
+    [state.questionStats.mechanismCorrect>=5,"Arrow Sniper"],
+    [state.questionStats.mechanismCorrect>=10,"Mechanism Machine"],
+    [state.questionStats.stereoCorrect>=10,"Stereo Survivor"],
     [state.streak>=3,"Three-day streak"],
     [state.streak>=7,"One-week practice"],
-    [state.xp>=500,"Lab regular"],
-    [Object.values(state.mastery).some(entry=>entry.score>=80),"Skill sharpened"],
-    [state.bossResults.length>=1,"Boss challenger"]
+    [state.bossResults.length>=1,"Boss Challenger"],
+    [state.bossResults.some(r=>r.percent>=80),"Boss Slayer"]
   ];
   checks.forEach(([condition,name])=>{if(condition) earned.add(name);});
   state.achievements = [...earned];
 }
 
+function updateExamTimer() {
+  if (!activeSession || activeSession.mode !== "exam" || !activeSession.deadline) return;
+  const remaining = activeSession.deadline - Date.now();
+  const minutes = Math.ceil(remaining/60000);
+  const timerDisplay = document.querySelector(".exam-timer");
+  if (timerDisplay) timerDisplay.textContent = `${minutes}m`;
+  if (remaining <= 0) {
+    if (sessionTimer) clearInterval(sessionTimer);
+    submitExam();
+  }
+}
+
 function finishSession() {
   const session = activeSession;
+  if (sessionTimer) clearInterval(sessionTimer);
+  sessionTimer = null;
+
+  if (session.mode === "recovery") {
+    state.hearts = Math.max(1, state.hearts);
+    activeSession = null;
+    saveState();
+    app.innerHTML = `<section class="result-banner recovery-result"><div class="eyebrow">Recovery room complete</div><h2>Repair sequence complete</h2><div class="result-score">${session.correct}/${session.answered}</div><p class="subtle">One heart restored. The repaired concepts are queued for spaced review.</p><div class="tools-row" style="justify-content:center"><button class="button primary" data-action="daily">Continue studying</button><button class="button secondary" data-action="home">Dashboard</button></div></section>`;
+    return;
+  }
+
+  if (session.mode === "exam") return renderExamReport(session);
+
   const percent = session.answered ? Math.round(session.correct/session.answered*100) : 0;
-  const result = { mode:session.mode, label:session.label, date:getToday(), correct:session.correct, total:session.answered, percent };
+  const result = { mode:session.mode, label:session.label, date:getToday(), correct:session.correct, total:session.answered, percent, hintsUsed:session.hintsUsed||0, bestCombo:session.bestCombo||0 };
   if (session.boss) {
     state.bossResults.push(result);
     state.bossResults = state.bossResults.slice(-50);
+    if (!session.hintsUsed) state.achievements.push("No Hint Needed");
     awardAchievements();
+  }
+  if (session.answered && session.correct===session.answered && !session.hintsUsed) {
+    state.xp += 25;
+    state.level = Math.floor(state.xp/100)+1;
+    state.achievements.push("Perfect Run");
   }
   activeSession = null;
   saveState();
+  const xpEarned = Math.max(0, state.xp - session.xpAtStart);
+  const topSkill = Object.entries(state.mastery).sort((a,b)=>b[1].score-a[1].score)[0]?.[0];
+  const nextThreat = Object.entries(state.mistakes).sort((a,b)=>b[1].count-a[1].count)[0]?.[0];
   app.innerHTML = `
     <section class="result-banner">
-      <div class="eyebrow">Quest complete</div>
+      <div class="eyebrow">Daily chest · run complete</div>
       <h2>${escapeHtml(session.label)}</h2>
       <div class="result-score">${percent}%</div>
-      <p class="subtle">${session.correct} correct of ${session.answered} attempted · ${state.xp} XP banked · ${state.streak}-day streak</p>
-      <p class="muted" style="font-size:12px">Questions you missed have been added to the spaced-review queue. A single session is practice, not proof of mastery.</p>
+      <p class="subtle">${session.correct} correct of ${session.answered} attempted · +${xpEarned} XP · peak combo x${session.bestCombo||0} · ${state.hearts} hearts · ${state.streak}-day streak</p>
+      <p class="muted" style="font-size:12px">Missed skills are queued for spaced review. Practice scores are not proof of mastery.</p>
       <div class="tools-row" style="justify-content:center"><button class="button primary" data-action="daily">Run another quest</button><button class="button secondary" data-action="stats">See full stats</button><button class="button secondary" data-action="home">Dashboard</button></div>
+    </section>`;
+}
+
+function recordExamDraw(severity) {
+  if (!activeSession || activeSession.mode !== "exam") return;
+  const question = getQuestion(activeSession.queue[activeSession.index]);
+  const correct = severity === "correct";
+  activeSession.answers[question.id] = {correct, severity, supplied: "Self-assessed", confidence: 2, hintsUsed: 0};
+  if (activeSession.index === activeSession.queue.length - 1) return submitExam();
+  advanceExam();
+}
+
+function advanceExam() {
+  if (!activeSession || activeSession.mode !== "exam") return;
+  if (activeSession.index === activeSession.queue.length - 1) return submitExam();
+  activeSession.index += 1;
+  selectedChoice = null; selectedAtom = null; selectedRank = []; selectedConfidence = 2;
+  revealedHint = 0; committed = false;
+  renderQuestion();
+}
+
+function submitExam() {
+  if (!activeSession || activeSession.mode !== "exam") return;
+  const session = activeSession;
+  if (sessionTimer) clearInterval(sessionTimer);
+  sessionTimer = null;
+  session.results = [];
+  session.queue.forEach(id => {
+    const question = getQuestion(id);
+    const answer = session.answers[id] || {correct: false, severity: "major", supplied: "No answer submitted", confidence: 2, hintsUsed: 0};
+    session.results.push({question, answer});
+    session.answered += 1;
+    if (answer.correct) session.correct += 1;
+  });
+  session.elapsedMs = Date.now() - (session.startedAtMs || Date.now());
+  awardAchievements();
+  saveState();
+  renderExamReport(session);
+}
+
+function renderExamReport(session) {
+  activeSession = null;
+  const total = session.results?.length || session.answered;
+  const correct = session.correct || 0;
+  const percent = total ? Math.round(correct / total * 100) : 0;
+  const rows = session.results || [];
+  const accuracy = subset => {
+    const selected = rows.filter(({question}) => subset(question));
+    return selected.length ? `${Math.round(selected.filter(({answer}) => answer.correct).length / selected.length * 100)}% (${selected.filter(({answer}) => answer.correct).length}/${selected.length})` : "—";
+  };
+  const skillResults = {};
+  rows.forEach(({question, answer}) => (question.skills || [question.topic]).forEach(skill => {
+    if (!skillResults[skill]) skillResults[skill] = {correct: 0, total: 0};
+    skillResults[skill].total += 1;
+    if (answer.correct) skillResults[skill].correct += 1;
+  }));
+  const sortedSkills = Object.entries(skillResults).sort((a, b) => (b[1].correct / b[1].total) - (a[1].correct / a[1].total));
+  const weak = sortedSkills.slice(-3).reverse().map(([skill]) => skill);
+  const strong = sortedSkills.slice(0, 3).map(([skill]) => skill);
+  app.innerHTML = `
+    <section class="result-banner">
+      <div class="eyebrow">Exam complete</div>
+      <h2>Final Report</h2>
+      <div class="result-score">${percent}%</div>
+      <p class="subtle">${correct}/${total} correct · time: ${Math.round(session.elapsedMs/60000)}m</p>
+      <div style="margin:16px 0"><strong>Weakest areas</strong><ul style="margin:8px 0;padding-left:20px">${weak.map(s=>`<li>${escapeHtml(s)}</li>`).join("")}</ul><strong>Strongest areas</strong><ul style="margin:8px 0;padding-left:20px">${strong.map(s=>`<li>${escapeHtml(s)}</li>`).join("")}</ul></div>
+      <p class="muted" style="font-size:12px">This exam report provides feedback only. Real exam performance depends on timing, pressure, and many factors beyond practice scores.</p>
+      <div class="tools-row" style="justify-content:center"><button class="button primary" data-action="home">Return to dashboard</button><button class="button secondary" data-action="stats">Full stats</button></div>
     </section>`;
 }
 
 function startByAction(action) {
   const mt1Ids = questionIds(q=>q.course==="mt1");
+  const mt2Ids = questionIds(q=>q.course==="mt2" && q.courseSpecific===true);
+  const previewIds = questionIds(q=>q.course==="mt2" && !q.courseSpecific);
   const importedIds = questionIds(q=>q.course==="mt2");
+  const confirmedAllIds = questionIds(q=>q.course==="mt1" || (q.course==="mt2"&&q.courseSpecific===true));
   const dueIds = questionIds(q=>(state.spacedRepetition[q.id]?.dueDate||"")<=getToday() && state.spacedRepetition[q.id]?.dueDate);
   const masteryWeak = Object.entries(state.mastery).sort((a,b)=>(a[1].score||0)-(b[1].score||0)).slice(0,5).map(([topic])=>topic);
   const mistakeSkills = Object.keys(state.mistakes);
-  const weaknessIds = dueIds.length ? dueIds : questionIds(q=>q.course==="mt1" && (q.skills||[]).some(skill=>mistakeSkills.includes(skill)||masteryWeak.includes(skill)||masteryWeak.includes(q.topic)));
+  const allConfirmed = confirmedAllIds.length;
+  const weaknessIds = dueIds.length ? dueIds : questionIds(q=> {
+    const isConfirmed = q.course==="mt1" || (q.course==="mt2"&&q.courseSpecific===true);
+    return isConfirmed && (q.skills||[]).some(skill=>mistakeSkills.includes(skill)||masteryWeak.includes(skill)||masteryWeak.includes(q.topic));
+  });
+
+  const mechanismIds = questionIds(q=>isMechanismQuestion(q) && (q.course==="mt1" || (q.course==="mt2"&&q.courseSpecific===true)));
+  const productIds = questionIds(q=>/\b(product|predict|regioselectivity|regioselect|regiochemistry|markovnikov|zaitsev|selectivity)\b/i.test(questionText(q)) && (q.course==="mt1" || (q.course==="mt2"&&q.courseSpecific===true)));
+  const stereoIds = questionIds(q=>isStereoQuestion(q) && (q.course==="mt1" || (q.course==="mt2"&&q.courseSpecific===true)));
+  const visualIds = questionIds(q=>(q.difficulty>=2 || /\b(structure|skeletal|fischer|newman|chair|wedge|dash|visualization)\b/i.test(questionText(q))) && (q.course==="mt1" || (q.course==="mt2"&&q.courseSpecific===true)));
+
+  if (action==="daily") {
+    const currentIds = mt2Ids.length ? mt2Ids : mt1Ids;
+    const maintenanceIds = mt2Ids.length ? mt1Ids : [];
+    const ratio = mt2Ids.length ? 0.75 : 1;
+    const queue = selectMixedQuestions(currentIds, maintenanceIds, 8, ratio);
+    return startSession("daily","Daily quest",queue,8,false,{queue});
+  }
+  if (action==="quick") {
+    const currentIds = mt2Ids.length ? mt2Ids : mt1Ids;
+    const maintenanceIds = mt2Ids.length ? mt1Ids : [];
+    const ratio = mt2Ids.length ? 0.75 : 1;
+    const queue = selectMixedQuestions(currentIds, maintenanceIds, 5, ratio);
+    return startSession("quick","Quick Quest",queue,5,false,{queue});
+  }
+  if (action==="ahead") {
+    return startSession("ahead","Ahead of Class",previewIds,6,false);
+  }
+  if (action==="recovery") {
+    const queue = Array.from({length:3},(_,i)=>recoverySkills[i%recoverySkills.length]).map(()=>questionIds(q=>(q.skills||[]).some(s=>recoverySkills.includes(s)) && (q.course==="mt1" || (q.course==="mt2"&&q.courseSpecific===true)))[0]).filter(Boolean);
+    return startSession("recovery","Recovery Battle",queue.slice(0,3),3,false);
+  }
+
   const modes = {
-    daily:["Daily quest",mt1Ids,8,false],
-    quick:["Quick Quest",mt1Ids,5,false],
     mt1:["Midterm 1 Review",mt1Ids,10,false],
     m1boss:["Midterm 1 Boss",mt1Ids,6,true],
-    mechanism:["Mechanism Grind",questionIds(q=>q.course==="mt1" && (q.skills||[]).some(skill=>["mechanism steps","curved-arrow mechanisms","drawing resonance contributors","SN1","E1","SN1 mechanism","E1 mechanism"].includes(skill))),6,false],
-    product:["Product Grind",questionIds(q=>q.course==="mt1" && (q.skills||[]).some(skill=>["Markovnikov regiochemistry","acid-catalyzed hydration/solvation","Zaitsev selectivity","E1 selectivity","stereochemical product count"].includes(skill))),6,false],
-    stereo:["Stereo Grind",questionIds(q=>q.course==="mt1" && (q.skills||[]).some(skill=>["CIP priority","R/S","E/Z","Fischer/Newman/wedge-dash conversion","isomer relationship classification","stereocenter detection"].includes(skill))),6,false],
-    visual:["Visual Grind",questionIds(q=>q.course==="mt1" && (q.difficulty>=3 || ["Structure interpretation","Functional groups","Stereochemistry"].includes(q.topic))),6,false],
-    weakness:["Weakness Hunt",weaknessIds.length?weaknessIds:mt1Ids,8,false],
-    boss:["Boss Battle",mt1Ids,8,true],
-    exam:["Exam Mode",mt1Ids,15,false],
-    final:["Final Exam Review",questionIds(q=>q.course==="mt1" || (q.course==="mt2"&&q.courseSpecific===true)),12,false],
-    mt2:["Midterm 2 Review",importedIds,10,false]
+    mechanism:["Mechanism Grind",mechanismIds,6,false],
+    product:["Product Grind",productIds,6,false],
+    stereo:["Stereo Grind",stereoIds,6,false],
+    visual:["Visual Grind",visualIds,6,false],
+    weakness:["Weakness Hunt",weaknessIds.length?weaknessIds:confirmedAllIds,8,false],
+    boss:["Boss Battle", allConfirmed ? selectMixedQuestions(mt2Ids.length?mt2Ids:mt1Ids, allConfirmed?mt1Ids:[], 8, 0.75) : mt1Ids, 8,true],
+    exam:["Exam Mode", allConfirmed ? selectMixedQuestions(mt2Ids.length?mt2Ids:mt1Ids, allConfirmed?mt1Ids:[], 15, 0.8) : mt1Ids, 15, false, {timerMinutes:30}],
+    final:["Final Exam Review",confirmedAllIds,12,false],
+    mt2:["Midterm 2 Review",mt2Ids,10,false]
   };
   const mode = modes[action];
   if (!mode) return;
-  startSession(action,mode[0],mode[1],mode[2],mode[3]);
+  startSession(action,mode[0],mode[1],mode[2],mode[3],mode[4]);
 }
 
 function renderStats() {
@@ -833,8 +1095,10 @@ app.addEventListener("click", event => {
     if (action==="import") return document.getElementById("import-file").click();
     if (action==="reset") return resetProgress();
     if (action==="hint") {
-      if (!committed) return;
-      revealedHint = true; return renderQuestion();
+      if (revealedHint >= 3) return;
+      revealedHint += 1;
+      if (activeSession && activeSession.hintsUsed !== undefined) activeSession.hintsUsed += 1;
+      return renderQuestion();
     }
     if (action==="check-answer") return checkAnswer();
     if (action==="reveal-rubric") return revealRubric();
@@ -842,11 +1106,13 @@ app.addEventListener("click", event => {
       if (!activeSession) return;
       activeSession.index += 1;
       delete activeSession.lastOutcome;
+      activeSession.heartLost = false;
       selectedChoice = null;
       selectedAtom = null;
       selectedRank = [];
+      activeSession.draft = "";
       selectedConfidence = 2;
-      revealedHint = false;
+      revealedHint = 0;
       committed = false;
       return renderQuestion();
     }
