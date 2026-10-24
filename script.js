@@ -54,7 +54,7 @@ const questionBank = [
   { id:"mechanism-proton", course:"mt1", topic:"Curved-arrow mechanisms", type:"choice", difficulty:2, skills:["mechanism steps","curved-arrow mechanisms","formal charge"], question:"During a proton-transfer step, which two electron movements are shown?", choices:["Base lone pair to H; H–A bond pair to A","A–H bond pair to H; H to base","Base lone pair to A; A–H bond to base","Two arrows from H to the base"], answer:"Base lone pair to H; H–A bond pair to A", hint:"The base forms a bond to the proton as the acid's bond electrons return to its conjugate base.", explanation:"Show the base's electron pair forming the new bond to H and the H–A sigma-bond pair moving onto A." },
   { id:"mechanism-resonance", course:"mt1", topic:"Mechanism completeness", type:"draw", difficulty:3, skills:["mechanism steps","drawing resonance contributors","formal charge"], question:"Draw the acid-catalyzed hydration sequence for propene. Show regiochemistry, charges, and the proton-transfer step; do not skip intermediates.", hint:"Choose protonation that gives the more substituted carbocation; water is neutral.", rubric:"1. Propene π bond takes H⁺ so the secondary carbocation forms at the middle carbon. 2. Neutral H₂O attacks that planar carbocation, forming an oxonium ion at the middle carbon. 3. A base removes a proton from O, with the O–H bond pair returning to oxygen, to give 2-propanol. Show formal charges and curved arrows in each step.", explanation:"The course requires the carbocation, neutral water attack, oxonium intermediate, and explicit deprotonation." },
   { id:"intramolecular", course:"mt1", topic:"Intramolecular cyclization", type:"choice", difficulty:2, skills:["intramolecular cyclization","carbocation stability"], question:"For a tethered carbocation and neutral O nucleophile, which ring sizes are usually favorable patterns in the supplied course examples?", choices:["Five- and six-membered rings","Only three-membered rings","Only four-membered rings","Every ring size is equally favorable"], answer:"Five- and six-membered rings", hint:"The packet specifically notes the preferred ring closures and a size usually avoided.", explanation:"Five- and six-membered closures are the commonly favorable patterns; four-membered rings are generally avoided in the examples." },
-  { id:"text-acid", course:"mt1", topic:"Acid/base reasoning", type:"text", difficulty:2, skills:["acid-base equilibrium","pKa"], question:"An acid HA has pKa 7; HB has pKa 13. In HA + B⁻ ⇌ A⁻ + HB, which side is favored? Enter “left” or “right”.", acceptedAnswers:["right"], hint:"The side containing the higher-pKa acid is favored.", explanation:"The right side contains HB, the weaker acid (higher pKa 13), so equilibrium favors the right." },
+  { id:"text-acid", course:"mt1", topic:"Acid/base reasoning", type:"text", difficulty:2, skills:["acid-base equilibrium","pKa"], question:"An acid HA has pKa 7; HB has pKa 13. In HA + B⁻ ⇌ A⁻ + HB, which side is favored? Enter "left" or "right".", acceptedAnswers:["right"], hint:"The side containing the higher-pKa acid is favored.", explanation:"The right side contains HB, the weaker acid (higher pKa 13), so equilibrium favors the right." },
   { id:"text-cip", course:"mt1", topic:"CIP priority", type:"text", difficulty:2, skills:["CIP priority"], question:"For CIP comparison, how many oxygen atoms does a carbonyl carbon count as being attached to? Enter a number.", acceptedAnswers:["2","two"], hint:"Apply the duplicate-atom convention for a double bond.", explanation:"A carbonyl carbon counts as attached to two oxygen atoms for CIP comparison." },
   { id:"text-mechanism", course:"mt1", topic:"Mechanism completeness", type:"text", difficulty:2, skills:["mechanism steps","formal charge"], question:"Neutral water attacks a carbocation. What is the immediate charge on the attached oxygen? Enter +, positive, or oxonium.", acceptedAnswers:["+","positive","oxonium"], hint:"Count the oxygen's bonds before it loses a proton.", explanation:"The immediate adduct is oxonium, with a +1 charge on oxygen." },
   { id:"text-aromaticity", course:"mt1", topic:"Aromaticity", type:"text", difficulty:2, skills:["aromaticity"], question:"A planar, cyclic, continuously conjugated ring with 10 π electrons is aromatic, anti-aromatic, or nonaromatic? Enter one.", acceptedAnswers:["aromatic"], hint:"10 fits 4n + 2 for n = 2.", explanation:"Ten π electrons satisfy 4n + 2 with n = 2, so the ring is aromatic under the stated conditions." },
@@ -380,6 +380,7 @@ function renderHome() {
   const achievements = state.achievements.slice(-4);
   const m1Count = questionIds(q => q.course === "mt1").length;
   const mt2Count = questionIds(q => q.course === "mt2").length;
+  const mt2Ids = questionIds(q => q.course === "mt2" && q.courseSpecific === true);
   const questButtons = [
     ["⚡","Quick Quest","5 mixed questions","quick"],
     ["⌂","Midterm 1 Review","10 archive questions","mt1"],
@@ -437,7 +438,7 @@ function renderHome() {
           const score = masteryAverage(skills);
           return `<div class="mastery-row"><div class="mastery-label"><span>${escapeHtml(group)}</span><span class="readiness">${score}%</span></div><div class="progress-track"><div class="progress-fill" style="width:${score}%"></div></div></div>`;
         }).join("")}
-        <div class="locked-panel"><span>🔒</span><span><strong>Midterm 2 campaign</strong><br>Known topics: SN2, E2, carbonyl additions, carbohydrates, and nucleophilic acyl substitution. Awaiting your course materials before course-specific drills unlock.</span></div>
+        ${!mt2Ready ? `<div class="locked-panel"><span>🔒</span><span><strong>Midterm 2 campaign</strong><br>Known topics: SN2, E2, carbonyl additions, carbohydrates, and nucleophilic acyl substitution. Awaiting your course materials before course-specific drills unlock.</span></div>` : `<div class="locked-panel"><span>✓</span><span><strong>Midterm 2 campaign active</strong><br>${mt2Ids.length} confirmed questions available. Focus practice on current material with MT1 maintenance review.</span></div>`}
         <p class="tip-box">Exam transfer matters: practice scores alone don't create mastery. Drawing prompts and unfamiliar combinations count toward your readiness too.</p>
       </section>
     </div>
@@ -497,17 +498,16 @@ function renderQuestion() {
       ${question.type === "rank" ? renderRank(question) : ""}
       ${question.type === "draw" ? `<div class="notice">Draw this on paper or a tablet before revealing the rubric. Show bonds, arrows, formal charges, and stereochemistry when requested.</div>` : ""}
       <div class="confidence-row" aria-label="Confidence rating"><span>How confident are you?</span>${[["1","Guessing"],["2","Somewhat"],["3","Confident"]].map(([value,label])=>`<button class="confidence-choice ${Number(value)===selectedConfidence?"selected":""}" data-confidence="${value}" type="button">${label}</button>`).join("")}</div>
-      ${activeSession.mode !== "exam" && revealedHint >= 1 && question.hint ? `<div class="feedback hint"><strong>Hint 1</strong><span style="font-size:0.9em">${escapeHtml(typeof question.hint === "string" ? question.hint : question.hint[0] || "")}</span></div>` : ""}
+      ${activeSession.mode !== "exam" && revealedHint >= 1 && question.hint ? `<div class="feedback hint"><strong>Hint 1</strong><span style="font-size:0.9em">${escapeHtml(typeof question.hint === "string" ? question.hint : (question.hints && question.hints[0]) || question.hint)}</span></div>` : ""}
       ${activeSession.mode !== "exam" && revealedHint >= 2 && question.hints && question.hints[1] ? `<div class="feedback hint"><strong>Hint 2</strong><span style="font-size:0.9em">${escapeHtml(question.hints[1])}</span></div>` : ""}
       ${activeSession.mode !== "exam" && revealedHint >= 3 && question.hints && question.hints[2] ? `<div class="feedback hint"><strong>Hint 3</strong><span style="font-size:0.9em">${escapeHtml(question.hints[2])}</span></div>` : ""}
       ${activeSession.mode !== "exam" && committed ? renderFeedback(question) : ""}
       <div class="question-actions">
         ${!committed ? `<button class="button primary" data-action="${question.type==="draw"?"reveal-rubric":(activeSession.mode==="exam"?"exam-next":"check-answer")}" type="button">${question.type==="draw"?"Show answer / rubric":(activeSession.mode==="exam"?"Next question":"Commit answer")}</button>` : ""}
         ${committed && question.type==="draw" && !activeSession.lastOutcome ? assessmentButtons() : ""}
-        ${activeSession.mode !== "exam" ? `<button class="button secondary small" data-action="hint" type="button">${revealedHint >= 3 ? "All hints revealed" : `Hint ${revealedHint + 1}`}</button>` : ""}
+        ${activeSession.mode !== "exam" ? `<button class="button secondary small" data-action="hint" type="button" ${(() => { const maxHints = question.hints ? 3 : (question.hint ? 1 : 0); return revealedHint >= maxHints ? "disabled" : ""; })()}>${revealedHint >= (question.hints ? 3 : (question.hint ? 1 : 0)) ? "All hints shown" : `Hint ${revealedHint + 1}`}</button>` : ""}
         ${activeSession.mode === "exam" ? `<span class="exam-timer" style="font-size:14px"></span>` : ""}
         ${committed && activeSession.lastOutcome ? `<span class="spacer"></span><button class="button primary" data-action="next" type="button">${index === total ? "Finish quest" : "Next question →"}</button>` : ""}
-        ${committed && question.type==="draw" && activeSession.lastOutcome ? `<span class="spacer"></span><button class="button primary" data-action="next" type="button">${index === total ? "Finish quest" : "Next question →"}</button>` : ""}
         <span class="spacer"></span><button class="quiet-button" data-action="home" type="button">Leave quest</button>
       </div>
     </article>`;
@@ -605,15 +605,15 @@ function revealRubric() {
   if (answer) answer.scrollIntoView({behavior:"smooth", block:"nearest"});
 }
 
-function commitOutcome(question, correct, severity, supplied = “”) {
+function commitOutcome(question, correct, severity, supplied = "") {
   committed = true;
   const confidence = selectedConfidence;
   const wasCorrect = correct;
-  const label = wasCorrect ? “Correct — good retrieval.” :
-    severity === “minor” ? “Minor mistake — review the detail.” :
-    severity === “major” ? “Major mistake — let's repair the concept.” : “Stuck — this skill is queued for early review.”;
-  let xp = wasCorrect ? 12 + Math.max(0, (question.difficulty || 1)-1)*2 : severity === “minor” ? 4 : 1;
-  if (question.type === “draw” && wasCorrect) xp += 6;
+  const label = wasCorrect ? "Correct — good retrieval." :
+    severity === "minor" ? "Minor mistake — review the detail." :
+    severity === "major" ? "Major mistake — let's repair the concept." : "Stuck — this skill is queued for early review.";
+  let xp = wasCorrect ? 12 + Math.max(0, (question.difficulty || 1)-1)*2 : severity === "minor" ? 4 : 1;
+  if (question.type === "draw" && wasCorrect) xp += 6;
 
   // Apply XP penalty for hints used
   if (revealedHint >= 1) xp -= 2;
@@ -632,21 +632,21 @@ function commitOutcome(question, correct, severity, supplied = “”) {
     if (isStereoQuestion(question)) state.questionStats.stereoCorrect += 1;
   }
 
-  if (question.type === “text” || question.type === “draw”) state.freeResponseScores.push({
-    questionId:question.id, score:wasCorrect?1:severity===”minor”?0.5:0, confidence, date:getToday()
+  if (question.type === "text" || question.type === "draw") state.freeResponseScores.push({
+    questionId:question.id, score:wasCorrect?1:severity==="minor"?0.5:0, confidence, date:getToday()
   });
   state.freeResponseScores = state.freeResponseScores.slice(-300);
   if (state.lastStudyDate !== getToday()) {
     if (!state.lastStudyDate) state.streak = 1;
     else {
       const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
-      const key = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,”0”)}-${String(yesterday.getDate()).padStart(2,”0”)}`;
+      const key = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,"0")}-${String(yesterday.getDate()).padStart(2,"0")}`;
       state.streak = state.lastStudyDate === key ? state.streak+1 : 1;
     }
     state.lastStudyDate = getToday();
   }
   const previousHearts = state.hearts;
-  if (!wasCorrect && severity !== “minor”) state.hearts = Math.max(0, state.hearts-1);
+  if (!wasCorrect && severity !== "minor") state.hearts = Math.max(0, state.hearts-1);
 
   // Update combo
   if (wasCorrect) {
@@ -659,10 +659,11 @@ function commitOutcome(question, correct, severity, supplied = “”) {
   if (revealedHint > 0) activeSession.combo = Math.max(0, (activeSession.combo || 0) - 1);
 
   const masteryKeys = [...new Set([question.topic,...(question.skills || [])])];
+  const courseTrack = question.course === "mt2" && question.courseSpecific ? "mt2" : question.course === "mt2" && !question.courseSpecific ? "preview" : "mt1";
   for (const key of masteryKeys) {
     const previous = state.mastery[key]?.score || 0;
     const score = wasCorrect ? Math.min(100, previous * .75 + 25) :
-      severity === “minor” ? Math.max(0,previous*.75+12) :
+      severity === "minor" ? Math.max(0,previous*.75+12) :
       Math.max(0,previous*.65);
     state.mastery[key] = {
       score:Math.round(score),
@@ -670,12 +671,15 @@ function commitOutcome(question, correct, severity, supplied = “”) {
       correct:(state.mastery[key]?.correct || 0)+(wasCorrect?1:0),
       lastSeen:getToday()
     };
+    // Also update course-specific mastery tracking
+    if (!state.courseMastery[courseTrack]) state.courseMastery[courseTrack] = {};
+    state.courseMastery[courseTrack][key] = state.mastery[key];
   }
-  const interval = wasCorrect ? (confidence===3?7:confidence===2?4:2) : severity===”minor”?2:1;
+  const interval = wasCorrect ? (confidence===3?7:confidence===2?4:2) : severity==="minor"?2:1;
   state.spacedRepetition[question.id] = {
     dueDate:dateAfter(interval), interval,
     repetitions:wasCorrect?(state.spacedRepetition[question.id]?.repetitions||0)+1:0,
-    lastResult:wasCorrect?”correct”:severity
+    lastResult:wasCorrect?"correct":severity
   };
   if (!wasCorrect) {
     for (const skill of question.skills || [question.topic]) {
@@ -686,19 +690,19 @@ function commitOutcome(question, correct, severity, supplied = “”) {
   if (wasCorrect) activeSession.correct += 1;
   activeSession.lastOutcome = {
     correct:wasCorrect, label,
-    message: wasCorrect ? question.explanation : `${question.explanation}${supplied ? ` Your response: “${supplied}”.` : “”}`,
+    message: wasCorrect ? question.explanation : `${question.explanation}${supplied ? ` Your response: "${supplied}".` : ""}`,
     severity, xp
   };
-  if (previousHearts > state.hearts && activeSession.mode !== “exam”) activeSession.heartLost = true;
+  if (previousHearts > state.hearts && activeSession.mode !== "exam") activeSession.heartLost = true;
 
   awardAchievements();
   saveState();
 
   // Check for recovery battle trigger
-  if (state.hearts === 0 && activeSession.mode !== “exam” && activeSession.mode !== “recovery”) {
+  if (state.hearts === 0 && activeSession.mode !== "exam" && activeSession.mode !== "recovery") {
     pausedSession = activeSession;
     recoverySkills = question.skills || [question.topic];
-    return startByAction(“recovery”);
+    return startByAction("recovery");
   }
 
   renderQuestion();
@@ -745,9 +749,22 @@ function finishSession() {
 
   if (session.mode === "recovery") {
     state.hearts = Math.max(1, state.hearts);
-    activeSession = null;
+    activeSession = pausedSession;
+    pausedSession = null;
+    recoverySkills = [];
     saveState();
-    app.innerHTML = `<section class="result-banner recovery-result"><div class="eyebrow">Recovery room complete</div><h2>Repair sequence complete</h2><div class="result-score">${session.correct}/${session.answered}</div><p class="subtle">One heart restored. The repaired concepts are queued for spaced review.</p><div class="tools-row" style="justify-content:center"><button class="button primary" data-action="daily">Continue studying</button><button class="button secondary" data-action="home">Dashboard</button></div></section>`;
+    if (activeSession && activeSession.index < activeSession.queue.length) {
+      activeSession.index += 1;
+      selectedChoice = null;
+      selectedAtom = null;
+      selectedRank = [];
+      selectedConfidence = 2;
+      revealedHint = 0;
+      committed = false;
+      renderQuestion();
+    } else {
+      finishSession();
+    }
     return;
   }
 
@@ -929,7 +946,7 @@ function renderStats() {
     <section class="panel" style="margin-top:16px">
       <div class="section-heading"><h2>Readiness overview</h2><span class="tag">course-specific only</span></div>
       ${groups.map(([name,skills])=>`<div class="mastery-row"><div class="mastery-label"><span>${escapeHtml(name)}</span><span class="readiness">${masteryAverage(skills)}%</span></div><div class="progress-track"><div class="progress-fill" style="width:${masteryAverage(skills)}%"></div></div></div>`).join("")}
-      <div class="locked-panel"><span>🔒</span><span>Midterm 2 readiness is not scored until a course content pack marked as confirmed CHEM 233 material is imported. Final readiness is provisional and currently reflects Midterm 1 only.</span></div>
+      ${!mt2Ready ? `<div class="locked-panel"><span>🔒</span><span>Midterm 2 readiness is not scored until a course content pack marked as confirmed CHEM 233 material is imported. Final readiness currently reflects Midterm 1 only.</span></div>` : `<div class="locked-panel"><span>✓</span><span>Midterm 2 content imported and active. Final readiness now includes all confirmed MT1 and MT2 material.</span></div>`}
     </section>
     <section class="panel" style="margin-top:16px">
       <div class="section-heading"><h2>Boss battle results</h2><span class="tag">${state.bossResults.length} total</span></div>
@@ -1045,14 +1062,14 @@ async function importFile(file) {
       incomingIds.add(question.id);
       return false;
     });
-    if (duplicate) throw new Error(`Question ID “${duplicate.id}” already exists; give new questions unique IDs.`);
+    if (duplicate) throw new Error(`Question ID "${duplicate.id}" already exists; give new questions unique IDs.`);
     state.importedQuestions.push(...questions);
     if (questions.some(question=>question.course==="mt2")) state.unlockedContent = [...new Set([...state.unlockedContent,"mt2"])];
     saveState(`${questions.length} content-pack question${questions.length===1?"":"s"} added; existing progress preserved.`);
     renderHome();
     const homeStatus = document.createElement("div");
     homeStatus.className = "notice";
-    homeStatus.textContent = `${questions.length} question${questions.length===1?"":"s"} added from “${pack.pack.title || pack.pack.id}”. Your existing save and progress were preserved.`;
+    homeStatus.textContent = `${questions.length} question${questions.length===1?"":"s"} added from "${pack.pack.title || pack.pack.id}". Your existing save and progress were preserved.`;
     app.prepend(homeStatus);
   } catch (error) {
     console.error("Content import failed.",error);
@@ -1102,6 +1119,7 @@ app.addEventListener("click", event => {
     }
     if (action==="check-answer") return checkAnswer();
     if (action==="reveal-rubric") return revealRubric();
+    if (action==="exam-next") return advanceExam();
     if (action==="next") {
       if (!activeSession) return;
       activeSession.index += 1;
