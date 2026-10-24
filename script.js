@@ -502,7 +502,7 @@ function renderQuestion() {
       ${activeSession.mode !== "exam" && revealedHint >= 3 && question.hints && question.hints[2] ? `<div class="feedback hint"><strong>Hint 3</strong><span style="font-size:0.9em">${escapeHtml(question.hints[2])}</span></div>` : ""}
       ${activeSession.mode !== "exam" && committed ? renderFeedback(question) : ""}
       <div class="question-actions">
-        ${!committed ? `<button class="button primary" data-action="${question.type==="draw"?"reveal-rubric":"${activeSession.mode==="exam"?"exam-next":"check-answer"}"}" type="button">${question.type==="draw"?"Show answer / rubric":activeSession.mode==="exam"?"Next question":"Commit answer"}</button>` : ""}
+        ${!committed ? `<button class="button primary" data-action="${question.type==="draw"?"reveal-rubric":(activeSession.mode==="exam"?"exam-next":"check-answer")}" type="button">${question.type==="draw"?"Show answer / rubric":(activeSession.mode==="exam"?"Next question":"Commit answer")}</button>` : ""}
         ${committed && question.type==="draw" && !activeSession.lastOutcome ? assessmentButtons() : ""}
         ${activeSession.mode !== "exam" ? `<button class="button secondary small" data-action="hint" type="button">${revealedHint >= 3 ? "All hints revealed" : `Hint ${revealedHint + 1}`}</button>` : ""}
         ${activeSession.mode === "exam" ? `<span class="exam-timer" style="font-size:14px"></span>` : ""}
