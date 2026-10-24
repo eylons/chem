@@ -505,7 +505,7 @@ function renderQuestion() {
       <div class="question-actions">
         ${!committed ? `<button class="button primary" data-action="${question.type==="draw"?"reveal-rubric":(activeSession.mode==="exam"?"exam-next":"check-answer")}" type="button">${question.type==="draw"?"Show answer / rubric":(activeSession.mode==="exam"?"Next question":"Commit answer")}</button>` : ""}
         ${committed && question.type==="draw" && !activeSession.lastOutcome ? assessmentButtons() : ""}
-        ${activeSession.mode !== "exam" ? `<button class="button secondary small" data-action="hint" type="button" ${(() => { const maxHints = question.hints ? 3 : (question.hint ? 1 : 0); return revealedHint >= maxHints ? "disabled" : ""; })()}>${revealedHint >= (question.hints ? 3 : (question.hint ? 1 : 0)) ? "All hints shown" : `Hint ${revealedHint + 1}`}</button>` : ""}
+        ${activeSession.mode !== "exam" ? (() => { const maxHints = question.hints ? 3 : (question.hint ? 1 : 0); const hintsText = revealedHint >= maxHints ? "All hints shown" : ("Hint " + (revealedHint + 1)); return `<button class="button secondary small" data-action="hint" type="button" ${revealedHint >= maxHints ? "disabled" : ""}>${hintsText}</button>`; })() : ""}
         ${activeSession.mode === "exam" ? `<span class="exam-timer" style="font-size:14px"></span>` : ""}
         ${committed && activeSession.lastOutcome ? `<span class="spacer"></span><button class="button primary" data-action="next" type="button">${index === total ? "Finish quest" : "Next question →"}</button>` : ""}
         <span class="spacer"></span><button class="quiet-button" data-action="home" type="button">Leave quest</button>
