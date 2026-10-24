@@ -1,36 +1,135 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101a22">
-  <meta name="description" content="A private, browser-based organic chemistry study quest for CHEM 233.">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1419">
+  <meta name="description" content="CHEM 233 Mechanism Quest: a private, offline-capable organic chemistry study game.">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <title>CHEM 233: Mechanism Quest</title>
   <link rel="stylesheet" href="style.css">
+  <script>
+    /* Startup guard: runs before any app code. If the app fails to start, show a
+       visible error screen instead of a blank page. Kept small and dependency-free. */
+    (function () {
+      var errors = [];
+      window.MQ_BOOT_ERRORS = errors;
+      function record(msg) { errors.push(String(msg)); if (document.readyState !== "loading") showFailure(); }
+      window.addEventListener("error", function (e) {
+        if (window.MQ_BOOTED) return;
+        var where = e && e.filename ? " (" + e.filename.split("/").pop() + ":" + e.lineno + ")" : "";
+        var target = e && e.target && e.target !== window && e.target.src ? "Failed to load " + e.target.src.split("/").pop() : null;
+        record(target || ((e && e.message ? e.message : "Script error") + where));
+      }, true);
+      window.addEventListener("unhandledrejection", function (e) {
+        if (window.MQ_BOOTED) return;
+        record("Unhandled promise rejection: " + (e && e.reason && e.reason.message ? e.reason.message : e && e.reason));
+      });
+      function showFailure() {
+        if (window.MQ_BOOTED) return;
+        var box = document.getElementById("boot-failure");
+        if (!box) return;
+        box.hidden = false;
+        var shell = document.getElementById("shell");
+        if (shell) shell.hidden = true;
+        var msg = document.getElementById("boot-msg");
+        if (msg) msg.textContent = errors.length ? errors.join("\n") : "The app did not finish starting (no error was reported).";
+      }
+      window.MQ_SHOW_BOOT_FAILURE = showFailure;
+      window.MQ_BOOT_RETRY = function () { location.reload(); };
+      window.MQ_BOOT_SAFE = function () {
+        try { sessionStorage.setItem("mq-safe-mode", "1"); } catch (e) { /* ignore */ }
+        location.reload();
+      };
+      window.MQ_BOOT_CLEAR_CACHE = function () {
+        var jobs = [];
+        try {
+          if (window.caches) jobs.push(caches.keys().then(function (k) { return Promise.all(k.map(function (x) { return caches.delete(x); })); }));
+          if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (r) { return Promise.all(r.map(function (x) { return x.unregister(); })); }));
+        } catch (e) { /* ignore */ }
+        Promise.all(jobs).then(function () { location.reload(); }, function () { location.reload(); });
+      };
+      window.MQ_BOOT_IMPORT = function (input) {
+        var f = input.files && input.files[0];
+        if (!f) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+          var out = document.getElementById("boot-import-status");
+          try {
+            var data = JSON.parse(String(reader.result));
+            if (!data || typeof data !== "object" || !(data.format === "mechanism-quest-save" || data.format === "mechanism-quest-state" || "xp" in data)) throw new Error("not a Mechanism Quest save");
+            localStorage.setItem("chem233-mechanism-quest-save-v2", JSON.stringify(data.format === "mechanism-quest-save" && data.data ? data.data : data));
+            try { sessionStorage.removeItem("mq-safe-mode"); } catch (e) { /* ignore */ }
+            out.textContent = "Backup stored. Reloading…";
+            setTimeout(function () { location.reload(); }, 400);
+          } catch (e) {
+            out.textContent = "Import failed: " + e.message;
+          }
+        };
+        reader.readAsText(f);
+      };
+      window.addEventListener("load", function () {
+        setTimeout(function () { if (!window.MQ_BOOTED) showFailure(); }, 2500);
+      });
+    })();
+  </script>
 </head>
 <body>
-  <div class="app-shell">
+  <div id="shell" class="shell">
     <header class="topbar">
-      <a class="brand" href="#" aria-label="Mechanism Quest home">
-        <span class="brand-mark" aria-hidden="true">M<span>Q</span></span>
-        <span><strong>MECHANISM QUEST</strong><small>CHEM 233 · ORGANIC CHEMISTRY</small></span>
+      <a id="brand" class="brand" href="./" aria-label="Mechanism Quest home">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" width="30" height="30"><polygon points="16,3 27,9.5 27,22.5 16,29 5,22.5 5,9.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="16" r="5" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>
+        <span class="brand-text"><strong>MECHANISM QUEST</strong><small>CHEM 233 &middot; ORGANIC CHEMISTRY</small></span>
       </a>
-      <div class="top-actions">
-        <button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">◐</button>
-        <button class="quiet-button" data-action="stats" type="button">My progress</button>
-      </div>
+      <div id="hud" class="hud"></div>
     </header>
-
-    <main id="app" class="main-content" tabindex="-1"></main>
-
+    <nav id="nav" class="nav" aria-label="Sections"></nav>
+    <main id="app" class="main" tabindex="-1">
+      <noscript><p class="card">Mechanism Quest needs JavaScript enabled.</p></noscript>
+    </main>
     <footer class="footer">
-      <span>Study locally. No account, analytics, or AI key.</span>
-      <span id="save-status" role="status" aria-live="polite">Progress saves in this browser.</span>
+      <span>Local-only study game &middot; no account, analytics or API key.</span>
+      <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
     </footer>
   </div>
-  <input id="import-file" type="file" accept="application/json,.json" hidden>
-  <script src="script.js"></script>
+
+  <section id="boot-failure" class="boot-failure" hidden>
+    <div class="card">
+      <div class="eyebrow">Startup error</div>
+      <h1>Mechanism Quest could not start.</h1>
+      <p>Your saved progress has not been deleted. Technical details:</p>
+      <pre id="boot-msg" class="mono"></pre>
+      <div class="row">
+        <button class="btn primary" type="button" onclick="MQ_BOOT_RETRY()">Retry</button>
+        <button class="btn" type="button" onclick="MQ_BOOT_SAFE()">Start without loading save</button>
+        <label class="btn">Import backup<input type="file" accept="application/json,.json" hidden onchange="MQ_BOOT_IMPORT(this)"></label>
+        <button class="btn ghost" type="button" onclick="MQ_BOOT_CLEAR_CACHE()">Clear cached app files</button>
+      </div>
+      <p id="boot-import-status" class="small"></p>
+    </div>
+  </section>
+
+  <script src="js/util.js"></script>
+  <script src="js/content.js"></script>
+  <script src="js/questions.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    (function () {
+      function start() {
+        try {
+          if (!window.MQ || !window.MQ.app || !window.MQ.engine || !window.MQ.storage) throw new Error("App modules did not load (a script is missing or failed to parse).");
+          window.MQ.app.boot();
+        } catch (e) {
+          window.MQ_BOOT_ERRORS.push((e && e.message) || String(e));
+          if (e && e.stack) window.MQ_BOOT_ERRORS.push(String(e.stack).split("\n").slice(0, 4).join("\n"));
+          window.MQ_SHOW_BOOT_FAILURE();
+        }
+      }
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
+    })();
+  </script>
 </body>
 </html>

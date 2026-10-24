@@ -21,7 +21,7 @@ The site files can live in a repository under your **personal GitHub account**. 
 
    ```sh
    git init -b main
-   git add index.html style.css script.js manifest.webmanifest icon.svg sw.js README.md
+   git add index.html style.css js/*.js manifest.webmanifest icon.svg sw.js README.md
    git commit -m "Build CHEM 233 Mechanism Quest"
    git remote add origin https://github.com/YOUR-PERSONAL-USERNAME/YOUR-REPOSITORY.git
    git push -u origin main
@@ -33,66 +33,63 @@ The site files can live in a repository under your **personal GitHub account**. 
 
 You sign in to GitHub to manage the repository and deployment. Visitors to the website do not sign in. Progress belongs to the browser and site origin where it was created: a different browser, device, or domain has separate local storage. Use **Export save** and **Import save** to transfer it. A save file is private study data; keep it out of the public repository.
 
-## Import course content without replacing progress
+## Architecture
 
-Use **Import save / content pack** to add questions. A content pack is JSON and can be imported repeatedly only if its question IDs are unique. Importing questions adds them to the existing question bank and leaves XP, mastery, streaks, and review schedules untouched. A save file instead restores the whole progress state and asks for confirmation before replacing the current state.
+Plain static files, no build step, no dependencies:
 
-Version 1 content-pack structure:
+| File | Role |
+|---|---|
+| `index.html` | Shell plus a small inline startup guard. If any script fails, it shows "Mechanism Quest could not start." with Retry / Start without loading save / Import backup / Clear cached app files. |
+| `js/util.js` | DOM builder, dates, answer normalization. |
+| `js/content.js` | Question validation, confirmed-vs-preview classification, campaign regions, enemy catalogue. |
+| `js/questions.js` | Built-in Midterm 1 bank. **Generated** by `python3 tools/build_questions.py`; do not hand-edit. |
+| `js/storage.js` | Load, migrate (v1 to v2), save, export, import. Never throws; malformed data degrades to defaults. |
+| `js/engine.js` | Mastery, spaced repetition, enemies, XP, run building, readiness, exam scoring. No DOM. |
+| `js/app.js` | Views and flows. Builds DOM nodes directly (no HTML strings). |
+| `sw.js` | Network-first service worker, cache `mechanism-quest-clean-v1`; deletes older caches. |
+
+Saves live under `chem233-mechanism-quest-save-v2`. On first load, the v1 key (`chem233-mechanism-quest-save-v1`) is migrated and **left untouched**, so the previous build can still be restored from git history.
+
+## Checks before every deploy
+
+```sh
+sh tools/check.sh   # parses every JS file + inline scripts with JavaScriptCore (Safari's engine)
+sh tests/run.sh     # headless logic tests; PACK_DIR must hold the two content-pack JSON files
+```
+
+`tests/browser-driver.js` is a local-only helper that plays a run by clicking the real UI buttons.
+
+## Content packs (version 1)
+
+Content packs are not stored in this public repository. Import them in the app with **Data → Import Content Pack**. Importing appends questions and never changes existing progress. A question whose `id` already exists is skipped and reported, never overwritten.
 
 ```json
 {
   "format": "mechanism-quest-content-pack",
   "version": 1,
-  "pack": {
-    "id": "unique-pack-id",
-    "title": "Pack title",
-    "scope": "confirmed-course-material"
-  },
+  "pack": { "id": "unique-pack-id", "title": "Pack title", "scope": "confirmed-course-material" },
   "questions": [
     {
-      "id": "unique-question-id",
-      "course": "mt1",
-      "courseSpecific": true,
-      "topic": "Acid/base equilibrium",
-      "type": "choice",
-      "question": "Which side is favored?",
-      "context": "Optional structure or notation shown with the prompt",
-      "choices": ["Left", "Right"],
-      "answer": "Right",
-      "explanation": "Why the answer follows from the course rule.",
-      "hint": "A cue revealed after the student commits.",
-      "difficulty": 2,
-      "skills": ["acid-base equilibrium", "pKa"],
-      "prerequisiteSkills": ["pKa recall"],
-      "commonMistakes": ["Compare the wrong acids"],
-      "tags": ["equilibrium", "midterm-1"]
+      "id": "unique-question-id", "course": "mt2", "courseSpecific": true,
+      "topic": "SN2 stereochemistry", "type": "choice",
+      "question": "...", "choices": ["Retention", "Inversion"], "answer": "Inversion",
+      "explanation": "...", "skills": ["sn2", "stereochemistry"], "difficulty": 2,
+      "hint": "legacy single hint",
+      "hints": ["small nudge", "stronger direction", "scaffold without the answer"],
+      "keyRule": "optional one-line rule shown after answering",
+      "module": "optional unit name; unknown units become new map regions",
+      "tags": [], "commonMistakes": [], "sourceNote": ""
     }
   ]
 }
 ```
 
-Supported types:
+Types: `choice` (`choices`, `answer`), `text` (`acceptedAnswers`), `draw` (`rubric` string, or `{answer, full[], minor[], major[]}`), `rank` (`items`, `answer` order), `select-atom` (`structure` with `atoms`/`bonds`, `answer` atom id). Any type may include a `structure` diagram.
 
-- `choice`: `choices` (strings) and `answer` (one of those strings).
-- `text`: `acceptedAnswers` (non-empty array of strings); free-response matching ignores capitalization and basic punctuation.
-- `draw`: `rubric` with the expected features or point criteria. Students self-assess against it.
-- `rank`: `items` and `answer`, both arrays containing the same strings; `answer` is the required order.
-- `select-atom`: a `structure` object with `viewBox`, `atoms` (`id`, `label`, numeric `x`/`y`), and `bonds` (`from`, `to`, `order` of 1 or 2); `answer` is the correct atom ID. The app renders and makes the atoms keyboard/click selectable as SVG.
-
-Every question needs a unique `id`, `topic`, `question`, `explanation`, and a non-empty `skills` array. `context`, `hint`, `difficulty`, `prerequisiteSkills`, `commonMistakes`, and `tags` are optional descriptive fields. `course` can be `mt1` or `mt2`; it defaults to `mt1`.
-
-Midterm 2 questions do **not** count as confirmed course coverage unless the pack uses `"scope": "confirmed-course-material"` and each relevant question sets `"courseSpecific": true`. Do not use that flag for generic textbook material: this keeps unsupported conventions out of the Midterm 2 readiness score. Generic imported questions may still be practiced. Every imported question should be checked against the actual slides or problem-set key before it is treated as course-specific.
+**Confirmed vs preview.** Official Midterm 2 readiness counts only `course: "mt2"` with `courseSpecific: true` from a pack whose scope is `confirmed-course-material`. Final readiness counts all confirmed material (MT1 + confirmed MT2 + future confirmed units). `courseSpecific: false` MT2 questions are preview material: they appear in **Ahead of Class** and never affect readiness, official mastery or the enemy database.
 
 ## Data and privacy
 
-- Study progress, imported questions, and theme preference are stored only in this browser's local storage. Clearing browser site data removes them.
-- **Export save** downloads a JSON backup containing progress and imported question packs. Keep the backup somewhere private.
-- **Import save / content pack** accepts either an exported save or a content pack. Save imports replace current progress only after a confirmation; content-pack imports append unique questions.
-- **Reset progress** asks for confirmation, then clears the saved game state, including imported content.
-- No credentials or personal data should be committed to this repository. The static site has no server to receive browser progress.
-
-## Source and course conventions
-
-The built-in Midterm 1 bank follows `CHEM233_compacted_course_context.md`, including the course's pKa ladder, its acetal/ketal terminology, no-carbocation-rearrangement rule, heat-as-E1 cue, neutral water/alcohol nucleophile convention, and stereochemical product-count checks. Midterm 2 remains locked until course material is added; its scheduled topic headings are not treated as sufficient evidence for professor-specific chemistry.
-
-The built-in bank has over 60% active-recall items (short responses, ranking, drawing rubrics, and clickable structure interpretation). Safer pKa comparisons also vary across the course's approximate memorization ladder on page loads; choices are shuffled where multiple choice is used.
+- Progress, imported questions and theme stay in this browser's storage. **Export Save** regularly; a save file is private study data, so keep it out of this repo.
+- **Reset Progress** requires typing RESET.
+- No account, analytics, server or API key.

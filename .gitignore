@@ -37,3 +37,6 @@ outputs/
 export/
 exports/
 results/
+
+# Local content packs and handoff files (course material; keep out of the public repo)
+chem2/
